@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Hearthland - Phase 0 connection spike</title>
+  <!--
+    THROWAWAY SPIKE. Phase 0. See spike/README.md and spike/FINDINGS.md.
+    The one question: can two phones exchange a single tap with NO internet?
+
+    Method (per the brief):
+      WebRTC data channel, established with NO signalling server. The offer and
+      answer (each a small compressed code) are carried between the two phones by
+      a hands-off local channel: a QR code, or the OS share sheet (AirDrop on iOS,
+      Nearby Share on Android), or copy/paste. On a shared personal hotspot with
+      no internet, ICE finds local network candidates and connects directly.
+
+    No game logic lives here. This folder is thrown away once the answer is known.
+  -->
+
+  <!--
+    QR display uses qrcode.js, vendored next to this file: the qrcode-generator
+    library (Kazuhiko Arase, MIT). We do not hand-roll an encoder (a spec QR
+    encoder is a large block of hard-to-verify tables). If qrcode.js is missing
+    the page still works via Share and paste. Scanning uses the browser's built-in
+    BarcodeDetector and needs no library.
+  -->
+  <script src="qrcode.js" onerror="window.__noQrLib = true"></script>
+
+  <style>
+    :root {
+      --bg: #f4ead6;          /* warm parchment */
+      --panel: #fffaf0;
+      --ink: #3a2f27;
+      --muted: #7a6a58;
+      --line: #e2d3b8;
+      --accent: #b6552f;      /* terracotta */
+      --accent-ink: #fff7ee;
+      --ok: #3f7d4e;
+      --warn: #b5892b;
+      --err: #a8402c;
+      --flash: #ffd98a;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; }
+    body {
+      font-family: ui-rounded, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif;
+      background: var(--bg); color: var(--ink);
+      line-height: 1.45;
+      padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px);
+      max-width: 560px; margin: 0 auto;
+    }
+    h1 { font-size: 1.25rem; margin: 18px 0 2px; }
+    .sub { color: var(--muted); font-size: 0.82rem; margin: 0 0 14px; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 14px; padding: 14px; margin: 12px 0;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+    }
+    .panel[hidden] { display: none; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .grow { flex: 1 1 auto; }
+    label { display: block; font-weight: 600; font-size: 0.85rem; margin: 0 0 6px; }
+    .hint { color: var(--muted); font-size: 0.78rem; margin: 6px 0 0; }
+    button {
+      font: inherit; font-weight: 700; cursor: pointer;
+      background: var(--accent); color: var(--accent-ink);
+      border: none; border-radius: 11px; padding: 12px 16px; min-height: 46px;
+    }
+    button.ghost { background: transparent; color: var(--accent); border: 1.5px solid var(--accent); }
+    button.small { padding: 8px 12px; min-height: 40px; font-size: 0.85rem; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    textarea, input[type=text] {
+      width: 100%; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.8rem; border: 1px solid var(--line); border-radius: 10px;
+      padding: 10px; background: #fff; color: var(--ink); resize: vertical;
+    }
+    .code {
+      word-break: break-all; background: #fff; border: 1px dashed var(--line);
+      border-radius: 10px; padding: 10px; font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.72rem; color: var(--muted); max-height: 120px; overflow: auto;
+    }
+    #qr { display: flex; justify-content: center; margin: 10px 0 4px; }
+    #qr img, #qr canvas { image-rendering: pixelated; width: 220px; height: 220px; border-radius: 8px; background:#fff; }
+    video { width: 100%; border-radius: 10px; background: #000; margin-top: 8px; }
+    .status { font-weight: 700; }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
+    .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
+    #tapBtn {
+      width: 100%; min-height: 110px; font-size: 1.4rem; border-radius: 18px;
+      background: var(--accent); color: var(--accent-ink);
+    }
+    #tapBtn:disabled { background: #d9c9ad; color: #8a7a63; }
+    .counts { display: flex; gap: 10px; margin-top: 10px; }
+    .count { flex: 1; text-align: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+    .count b { display: block; font-size: 1.5rem; }
+    .count span { font-size: 0.72rem; color: var(--muted); }
+    #log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.74rem; color: var(--muted); max-height: 150px; overflow: auto; margin-top: 8px; }
+    #log div { padding: 1px 0; border-top: 1px solid var(--line); }
+    .flash { animation: flash 0.5s ease-out; }
+    @keyframes flash { from { background: var(--flash); } to { background: var(--panel); } }
+    .steps { font-size: 0.8rem; color: var(--muted); margin: 8px 0 0; padding-left: 18px; }
+    .steps li { margin: 3px 0; }
+  </style>
+</head>
+<body>
+  <h1>Hearthland - connection spike</h1>
+  <p class="sub">Phase 0. Two phones, one tap, no internet. Throwaway proof.</p>
+
+  <div class="panel">
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">Not connected</span></div>
+    <p class="hint" id="ctxHint"></p>
+  </div>
+
+  <!-- Step 1: pick a role -->
+  <div class="panel" id="rolePanel">
+    <label>Start here</label>
+    <div class="row">
+      <button id="hostBtn" class="grow">Create a game (Host)</button>
+      <button id="joinBtn" class="grow ghost">Join a game (Guest)</button>
+    </div>
+    <ul class="steps">
+      <li>One phone is Host, the other is Guest.</li>
+      <li>Host makes a code, Guest replies with a code, done.</li>
+      <li>Send codes by QR, the Share sheet (AirDrop / Nearby Share), or paste.</li>
+    </ul>
+  </div>
+
+  <!-- Step 2: show my code (offer for host, answer for guest) -->
+  <div class="panel" id="outPanel" hidden>
+    <label id="outLabel">Your code</label>
+    <div id="qr"></div>
+    <div class="row">
+      <button id="shareBtn" class="small ghost">Share</button>
+      <button id="copyBtn" class="small ghost">Copy</button>
+    </div>
+    <div class="code" id="outCode"></div>
+    <p class="hint" id="outHint"></p>
+  </div>
+
+  <!-- Step 3: take in the peer's code -->
+  <div class="panel" id="inPanel" hidden>
+    <label id="inLabel">Paste your friend's code</label>
+    <textarea id="inCode" rows="3" placeholder="Paste the code here, or scan it"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="connectBtn" class="grow">Connect</button>
+      <button id="scanBtn" class="small ghost">Scan QR</button>
+    </div>
+    <video id="cam" playsinline hidden></video>
+    <p class="hint" id="inHint"></p>
+  </div>
+
+  <!-- Step 4: the actual test -->
+  <div class="panel" id="tapPanel" hidden>
+    <button id="tapBtn" disabled>Tap</button>
+    <div class="counts">
+      <div class="count"><b id="youCount">0</b><span>you tapped</span></div>
+      <div class="count"><b id="peerCount">0</b><span>peer tapped</span></div>
+      <div class="count"><b id="rtt">-</b><span>round trip</span></div>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div class="panel">
+    <button id="resetBtn" class="small ghost">Reset</button>
+    <span class="hint" id="capHint"></span>
+  </div>
+
+<!-- classic script (not a module): module scripts are blocked over file://, and
+     this page must open as a local file on a phone with no server -->
+<script>
+  'use strict';
+
+  // ------------------------------------------------------------------ helpers
+  const $ = (id) => document.getElementById(id);
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  function setStatus(text, kind) {
+    $('statusText').textContent = text;
+    $('dot').className = 'dot' + (kind ? ' ' + kind : '');
+  }
+  function log(msg) {
+    const line = document.createElement('div');
+    const t = new Date().toLocaleTimeString('en-GB');
+    line.textContent = t + '  ' + msg;
+    $('log').prepend(line);
+  }
+
+  // base64url so the code survives QR byte decoding and URLs alike
+  function toB64url(bytes) {
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function fromB64url(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    const bin = atob(str);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  const hasCompression = typeof CompressionStream !== 'undefined';
+  async function deflate(bytes) {
+    const cs = new CompressionStream('deflate-raw');
+    const buf = await new Response(new Blob([bytes]).stream().pipeThrough(cs)).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  async function inflate(bytes) {
+    const ds = new DecompressionStream('deflate-raw');
+    const buf = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  // Pack an SDP into the smallest text code we can. Prefix 1 char marks whether
+  // the payload is deflated ('D') or plain ('P'), so a phone without
+  // CompressionStream can still read a code made by one that has it.
+  async function pack(kind, sdp) {
+    const json = JSON.stringify({ v: 1, k: kind, s: sdp });
+    const raw = enc.encode(json);
+    if (hasCompression) return 'D' + toB64url(await deflate(raw));
+    return 'P' + toB64url(raw);
+  }
+  async function unpack(code) {
+    code = code.trim();
+    const tag = code[0];
+    const body = fromB64url(code.slice(1));
+    let raw;
+    if (tag === 'D') raw = await inflate(body);
+    else if (tag === 'P') raw = body;
+    else throw new Error('unrecognised code');
+    const obj = JSON.parse(dec.decode(raw));
+    if (!obj || !obj.s || !obj.k) throw new Error('bad code');
+    return obj; // { v, k:'offer'|'answer', s: sdp }
+  }
+
+  // ------------------------------------------------------------- QR generate
+  // Uses a drop-in encoder if present (window.qrcode from qrcode-generator).
+  // Otherwise the QR slot stays empty and we lean on Share / Copy / paste.
+  function showQr(text) {
+    const box = $('qr');
+    box.innerHTML = '';
+    const gen = window.qrcode;
+    if (typeof gen !== 'function') { box.hidden = true; return; }
+    try {
+      const qr = gen(0, 'L');          // 0 = auto-pick the smallest fitting version
+      qr.addData(text);
+      qr.make();
+      box.hidden = false;
+      box.innerHTML = qr.createImgTag(4, 8);
+    } catch (e) {
+      // payload too big for a single QR, or encoder refused: fall back quietly
+      box.hidden = true;
+      log('QR too large for one code, use Share or Copy');
+    }
+  }
+
+  // -------------------------------------------------------------- QR scan
+  let barcodeSupported = false;
+  (async () => {
+    try {
+      if ('BarcodeDetector' in window) {
+        const fmts = await window.BarcodeDetector.getSupportedFormats();
+        barcodeSupported = fmts.includes('qr_code');
+      }
+    } catch { barcodeSupported = false; }
+    $('scanBtn').style.display = barcodeSupported ? '' : 'none';
+  })();
+
+  let scanStream = null;
+  async function scan() {
+    if (!barcodeSupported) return;
+    const video = $('cam');
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = scanStream; video.hidden = false; await video.play();
+      const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      const tick = async () => {
+        if (!scanStream) return;
+        try {
+          const codes = await detector.detect(video);
+          if (codes.length) {
+            $('inCode').value = codes[0].rawValue;
+            stopScan();
+            connect();
+            return;
+          }
+        } catch { /* keep trying */ }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    } catch (e) {
+      $('inHint').textContent = 'Camera unavailable here (' + e.name + '). Use Share or paste instead.';
+      stopScan();
+    }
+  }
+  function stopScan() {
+    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+    const v = $('cam'); v.hidden = true; v.srcObject = null;
+  }
+
+  // ---------------------------------------------------------------- WebRTC
+  // No iceServers on purpose. On a plane there is no STUN or TURN to reach, so
+  // we ask only for host candidates on the local network (the shared hotspot),
+  // which connect the two phones directly. This is the whole trick.
+  const RTC_CONFIG = { iceServers: [] };
+
+  let pc = null;
+  let channel = null;
+  let role = null;          // 'host' | 'guest'
+  let youCount = 0, peerCount = 0;
+
+  function newPeer() {
+    pc = new RTCPeerConnection(RTC_CONFIG);
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      log('ice: ' + s);
+      if (s === 'failed' || s === 'disconnected') setStatus('Connection ' + s, 'err');
+    };
+    pc.onconnectionstatechange = () => log('peer: ' + pc.connectionState);
+    return pc;
+  }
+
+  // Non-trickle ICE: wait until gathering is complete so the single code we show
+  // already carries every candidate. A short timeout guards against browsers
+  // that never fire 'complete' once they have what they need.
+  function waitForIce(pc) {
+    return new Promise((resolve) => {
+      if (pc.iceGatheringState === 'complete') return resolve();
+      let done = false;
+      const finish = () => { if (done) return; done = true; resolve(); };
+      pc.addEventListener('icegatheringstatechange', () => {
+        if (pc.iceGatheringState === 'complete') finish();
+      });
+      pc.addEventListener('icecandidate', (e) => { if (!e.candidate) finish(); });
+      setTimeout(finish, 2500);
+    });
+  }
+
+  function wireChannel(ch) {
+    channel = ch;
+    ch.onopen = () => {
+      setStatus('Connected. Tap away.', 'ok');
+      $('tapPanel').hidden = false;
+      $('outPanel').hidden = true;
+      $('inPanel').hidden = true;
+      $('rolePanel').hidden = true;
+      $('tapBtn').disabled = false;
+      stopScan();
+      log('data channel open');
+    };
+    ch.onclose = () => { setStatus('Peer left', 'warn'); $('tapBtn').disabled = true; };
+    ch.onmessage = (e) => {
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === 'tap') {
+        peerCount++; $('peerCount').textContent = peerCount;
+        document.body.classList.remove('flash'); void document.body.offsetWidth;
+        document.body.classList.add('flash');
+        log('PEER tapped  #' + m.id);
+        ch.send(JSON.stringify({ t: 'ack', id: m.id, ts: m.ts }));
+      } else if (m.t === 'ack') {
+        const rtt = Math.round(performance.now() - m.ts);
+        $('rtt').textContent = rtt + 'ms';
+      }
+    };
+  }
+
+  async function startHost() {
+    role = 'host';
+    newPeer();
+    wireChannel(pc.createDataChannel('taps', { ordered: true }));
+    // guest's data channel arrives via ondatachannel only for the answering side;
+    // as host we created it above.
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIce(pc);
+    const code = await pack('offer', pc.localDescription.sdp);
+    $('outLabel').textContent = 'Your Host code (send it to the Guest)';
+    $('outHint').textContent = 'Then paste the Guest reply below to finish.';
+    $('inLabel').textContent = 'Paste the Guest reply';
+    showCode(code);
+    $('outPanel').hidden = false;
+    $('inPanel').hidden = false;
+    $('rolePanel').hidden = true;
+    setStatus('Waiting for the Guest reply', 'warn');
+    log('offer ready (' + code.length + ' chars)');
+  }
+
+  async function startGuest() {
+    role = 'guest';
+    $('inLabel').textContent = 'Paste the Host code';
+    $('inHint').textContent = 'Then send the reply code it makes back to the Host.';
+    $('inPanel').hidden = false;
+    $('rolePanel').hidden = true;
+    setStatus('Waiting for the Host code', 'warn');
+  }
+
+  async function connect() {
+    const text = $('inCode').value.trim();
+    if (!text) return;
+    let obj; try { obj = await unpack(text); } catch (e) { $('inHint').textContent = 'That code did not read: ' + e.message; return; }
+
+    if (role === 'guest') {
+      if (obj.k !== 'offer') { $('inHint').textContent = 'Expected a Host code, that looks like a reply.'; return; }
+      newPeer();
+      pc.ondatachannel = (e) => wireChannel(e.channel);
+      await pc.setRemoteDescription({ type: 'offer', sdp: obj.s });
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await waitForIce(pc);
+      const code = await pack('answer', pc.localDescription.sdp);
+      $('outLabel').textContent = 'Your reply code (send it back to the Host)';
+      $('outHint').textContent = 'The link opens as soon as the Host takes this in.';
+      showCode(code);
+      $('outPanel').hidden = false;
+      setStatus('Reply ready, send it to the Host', 'warn');
+      log('answer ready (' + code.length + ' chars)');
+    } else if (role === 'host') {
+      if (obj.k !== 'answer') { $('inHint').textContent = 'Expected a Guest reply, that looks like a Host code.'; return; }
+      await pc.setRemoteDescription({ type: 'answer', sdp: obj.s });
+      setStatus('Linking...', 'warn');
+      log('answer applied, linking');
+    }
+  }
+
+  let currentCode = '';
+  function showCode(code) {
+    currentCode = code;
+    $('outCode').textContent = code;
+    showQr(code);
+  }
+
+  // --------------------------------------------------------------- tap + UI
+  $('tapBtn').onclick = () => {
+    if (!channel || channel.readyState !== 'open') return;
+    youCount++; $('youCount').textContent = youCount;
+    channel.send(JSON.stringify({ t: 'tap', id: youCount, ts: performance.now() }));
+    log('you tapped  #' + youCount);
+  };
+
+  $('hostBtn').onclick = () => startHost().catch(e => { log('host error: ' + e.message); setStatus('Error: ' + e.message, 'err'); });
+  $('joinBtn').onclick = () => startGuest();
+  $('connectBtn').onclick = () => connect().catch(e => { log('connect error: ' + e.message); });
+  $('scanBtn').onclick = () => scan();
+
+  $('copyBtn').onclick = async () => {
+    try { await navigator.clipboard.writeText(currentCode); $('outHint').textContent = 'Copied. Send it to your friend.'; }
+    catch { $('outHint').textContent = 'Copy failed, select the code by hand.'; }
+  };
+  $('shareBtn').onclick = async () => {
+    if (navigator.share) { try { await navigator.share({ title: 'Hearthland code', text: currentCode }); } catch {} }
+    else $('outHint').textContent = 'Share sheet not available here, use Copy.';
+  };
+  if (!navigator.share) $('shareBtn').style.display = 'none';
+
+  $('resetBtn').onclick = () => { stopScan(); if (pc) pc.close(); location.reload(); };
+
+  // --------------------------------------------------------- environment note
+  (function envNote() {
+    const secure = window.isSecureContext;
+    const bits = [];
+    bits.push(hasCompression ? 'compression on' : 'compression off (codes larger)');
+    bits.push(barcodeSupportedText());
+    bits.push(window.qrcode ? 'QR display on' : 'QR display off (add qrcode.js)');
+    bits.push(secure ? 'secure context' : 'not a secure context (camera may be blocked)');
+    $('capHint').textContent = bits.join(' - ');
+    $('ctxHint').textContent = secure
+      ? 'On a plane: turn one phone into a hotspot, join the other to it, keep aeroplane mode on for both.'
+      : 'Camera scanning needs a secure context. Paste or Share still work. The native shell (phase 2) fixes this.';
+  })();
+  function barcodeSupportedText() { return ('BarcodeDetector' in window) ? 'scan available' : 'scan off (no BarcodeDetector)'; }
+</script>
+</body>
+</html>
