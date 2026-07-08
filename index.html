@@ -4,6 +4,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Hearthland - Phase 0 connection spike</title>
+
+  <!-- Installable, offline-first. The page must open with NO internet, so it is a
+       PWA: visit once online, add to home screen, then it loads from cache on a
+       plane. See sw.js. -->
+  <meta name="theme-color" content="#b6552f" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
   <!--
     THROWAWAY SPIKE. Phase 0. See spike/README.md and spike/FINDINGS.md.
     The one question: can two phones exchange a single tap with NO internet?
@@ -110,6 +117,7 @@
   <div class="panel">
     <div class="status"><span id="dot" class="dot"></span><span id="statusText">Not connected</span></div>
     <p class="hint" id="ctxHint"></p>
+    <p class="hint" id="offlineHint" style="color:var(--ok); font-weight:700"></p>
   </div>
 
   <!-- Step 1: pick a role -->
@@ -471,6 +479,27 @@
       : 'Camera scanning needs a secure context. Paste or Share still work. The native shell (phase 2) fixes this.';
   })();
   function barcodeSupportedText() { return ('BarcodeDetector' in window) ? 'scan available' : 'scan off (no BarcodeDetector)'; }
+
+  // ---------------------------------------------------- offline (service worker)
+  // Register the worker and tell the user, clearly, when the page is cached and
+  // therefore safe to use with no internet. Without this the page cannot open on
+  // a plane, since it is served from the web.
+  (function registerSW() {
+    const hint = $('offlineHint');
+    if (!('serviceWorker' in navigator)) { hint.textContent = ''; return; }
+    if (!window.isSecureContext) { hint.style.color = 'var(--warn)'; hint.textContent = 'Offline mode needs HTTPS. Open the hosted link, not a local file.'; return; }
+    hint.style.color = 'var(--muted)';
+    hint.textContent = 'Preparing offline mode...';
+    navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(async () => {
+      // confirm the shell is actually cached before we promise offline
+      let cached = false;
+      try { const c = await caches.open('hearthland-spike-v2'); cached = !!(await c.match('./qrcode.js')); } catch {}
+      hint.style.color = cached ? 'var(--ok)' : 'var(--warn)';
+      hint.textContent = cached
+        ? 'Offline ready. Add to Home screen, then aeroplane mode is fine.'
+        : 'Offline cache incomplete, reload once more on internet.';
+    }).catch((e) => { hint.style.color = 'var(--warn)'; hint.textContent = 'Offline mode failed to set up (' + e.message + ').'; });
+  })();
 </script>
 </body>
 </html>
